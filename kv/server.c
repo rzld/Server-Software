@@ -19,6 +19,8 @@
 
 /* Add anything you want here. */
 pthread_mutex_t lock;
+pthread_cond_t newClient;
+bool checkClient;
 
 /* A worker thread. You should write the code of this function. */
 void* worker(void* p) {
@@ -26,6 +28,15 @@ void* worker(void* p) {
   int inputSize;
   char *message,
        buffer[255];
+
+  //lock thread
+  pthread_mutex_lock(&lock); //Check error!!!
+
+  //wait for connection
+  while(!checkClient)
+  {
+    pthread_cond_wait(&newClient, &lock);
+  }
 
   //welcome message
   message = "Welcome to the KV store.\n";
@@ -103,6 +114,8 @@ void* worker(void* p) {
   {
     //error: too many parameters
   }
+
+  pthread_mutex_unlock(&lock);
 }
 
 /* You may add code to the main() function. */
@@ -118,9 +131,18 @@ int main(int argc, char** argv) {
 	}
 
   // start writing
-  int controlSocket, dataSocket;
-  struct sockaddr_in server, client;
+  int controlSocket, dataSocket, clientSocket;
+  struct sockaddr_in server, clients;
   pthread_t worker[100], client[100];
+
+  pthread_mutex_init(&lock);  //dont forget error handling!
+
+  //worker thread pools
+  for (int i = 0; i < NTHREADS; i++)
+  {
+    workerID[i] = i;
+    pthread_create(&worker[i], NULL, worker, workerID[i]);
+  }
 
   //create socket
   controlSocket = socket(AF_INET, SOCK_STREAM, 0);
@@ -144,14 +166,21 @@ int main(int argc, char** argv) {
   server.sin_addr.s_addr = htonl(INADDR_ANY);
   server.sin_port = htons(dport);
 
+  /*
+  socklen_t len2 = sizeof(clients);
+  memset(&clients, 0, len2);
+  clients.sin_family = AF_INET;
+  clients.sin_addr.sts_addr = htonl(INADDR_ANY);
+  clients.sin_port = htons(dport);
+  */
+
   //bind
   int errBindC = bind(controlSocket, &server, len);
   int errBindD = bind(dataSocket, &server, len);
-
   if (errBindC < 0 || errBindD < 0)
   {
     printf("Bind error.\n");
-    return 0;
+    return 1;
   }
   printf("Bind success.\n");
 
@@ -159,14 +188,16 @@ int main(int argc, char** argv) {
   listen(controlSocket, BACKLOG);
   listen(dataSocket, BACKLOG);
 
-  //accept and incoming connection
+  //waiting for incoming connection
+  printf("Waiting for clients...");
+  int c = sizeof(struct sockaddr_in);
 
-  //thread
-  for (int i = 0; i < NTHREADS; i++)
+  //accept any incoming connection
+  while (clientSocket = accept(dataSocket, &client, &c))
   {
-    workerID[i] = i;
-    pthread_create(&worker[i], NULL, worker, workerID[i]);
+    printf("Connection accepted.");
+    //wake up thread, then join
   }
 
-    return 0;
+  return 0;
 }
