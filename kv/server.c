@@ -34,7 +34,7 @@ void* worker(void* p) {
   write(socket_, message, strlen(message));
 
   //read from client
-  enum DATA_CMD cmd;
+  enum DATA_CMD cmd;    //data
   char* key;
   char* text;
   while ((inputSize = recv(socket_, buffer, 255, 0)))
@@ -60,9 +60,48 @@ void* worker(void* p) {
   int msg = parse_d(buffer, &cmd, &key, &text);
 
   //write response line
-  if (msg == NULL)
+  if (cmd == D_PUT)
   {
-    //close connection
+    //the line contains "put key value" command
+    // the pointers key and text point to 0-terminated strings
+    // containing the key and value
+  }
+  else if (cmd == D_GET)
+  {
+    //contains a "get key" command
+    // pointer key points to the key and text is null
+  }
+  else if (cmd == D_COUNT)
+  {
+    //contains "count" command. key and value null
+  }
+  else if (cmd == D_DELETE)
+  {
+    //contains "delete" key. pointer key points to the key and text is null
+  }
+  else if (cmd == D_EXISTS)
+  {
+    //contains "exists" key command. pointer key points to the key and text is null
+  }
+  else if (cmd == D_END)
+  {
+    //line empty, close connection
+  }
+  else if (cmd == D_ERR_OL)
+  {
+    //error: line too long
+  }
+  else if (cmd == D_ERR_INVALID)
+  {
+    //error: invalid command
+  }
+  else if (msg == D_ERR_SHORT)
+  {
+    //error: too few parameters
+  }
+  else if (msg == D_ERR_LONG)
+  {
+    //error: too many parameters
   }
 }
 
@@ -79,26 +118,46 @@ int main(int argc, char** argv) {
 	}
 
   // start writing
-  int socketDesc, clientSocket, c;
+  int controlSocket, dataSocket;
   struct sockaddr_in server, client;
   pthread_t worker[100], client[100];
 
   //create socket
-  socketDesc = socket(AF_INET, SOCK_STREAM, 0);
-  if (socketDesc == -1)
+  controlSocket = socket(AF_INET, SOCK_STREAM, 0);
+  if (controlSocket == -1)
   {
-    printf("Socket creation failed.\n");
+    printf("Control socket creation failed.\n");
   }
-  printf("Socket created.\n");
+
+  dataSocket = socket(AF_INET, SOCK_STREAM, 0);
+  if (dataSocket == -1)
+  {
+    printf("Data socket creation failed.\n");
+  }
+
+  printf("Sockets created.\n");
 
   //sockaddr_in structure
+  socklen_t len = sizeof(server);
+  memset(&server, 0, len);
   server.sin_family = AF_INET;
-  server.sin_addr.s_addr = INADDR_ANY;
+  server.sin_addr.s_addr = htonl(INADDR_ANY);
   server.sin_port = htons(dport);
 
   //bind
+  int errBindC = bind(controlSocket, &server, len);
+  int errBindD = bind(dataSocket, &server, len);
+
+  if (errBindC < 0 || errBindD < 0)
+  {
+    printf("Bind error.\n");
+    return 0;
+  }
+  printf("Bind success.\n");
 
   //listen
+  listen(controlSocket, BACKLOG);
+  listen(dataSocket, BACKLOG);
 
   //accept and incoming connection
 
