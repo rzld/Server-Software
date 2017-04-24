@@ -13,14 +13,17 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdbool.h>
 
-#define NTHREADS = 4;
-#define BACKLOG = 10;
+#define NTHREADS 4
+#define BACKLOG 10
 
 /* Add anything you want here. */
 pthread_mutex_t lock;
 pthread_cond_t newClient;
 bool checkClient;
+int workerBusy, clientWaiting, nConnections;
+bool workerTaken[NTHREADS];
 
 /* A worker thread. You should write the code of this function. */
 void* worker(void* p) {
@@ -29,14 +32,20 @@ void* worker(void* p) {
   char *message,
        buffer[255];
 
+  printf("Worker %d is waiting for connection.\n", socket_);
+
   //lock thread
   pthread_mutex_lock(&lock); //Check error!!!
+
+  workerTaken[socket_] = false;
 
   //wait for connection
   while(!checkClient)
   {
     pthread_cond_wait(&newClient, &lock);
   }
+
+  workerTaken[socket_] = true;
 
   //welcome message
   message = "Welcome to the KV store.\n";
@@ -76,23 +85,28 @@ void* worker(void* p) {
     //the line contains "put key value" command
     // the pointers key and text point to 0-terminated strings
     // containing the key and value
+    int put_ = createItem(key, text);
   }
   else if (cmd == D_GET)
   {
     //contains a "get key" command
     // pointer key points to the key and text is null
+    int get_ = findValue(key);
   }
   else if (cmd == D_COUNT)
   {
     //contains "count" command. key and value null
+    int itemsCount = countItems();
   }
   else if (cmd == D_DELETE)
   {
     //contains "delete" key. pointer key points to the key and text is null
+    int del_ = deleteItem(key, 1);
   }
   else if (cmd == D_EXISTS)
   {
-    //contains "exists" key command. pointer key points to the key and text is null
+    //contains "exists" key command. pointer key points to the key and text is nully
+    int exists_ = itemExists(key);
   }
   else if (cmd == D_END)
   {
@@ -131,17 +145,17 @@ int main(int argc, char** argv) {
 	}
 
   // start writing
-  int controlSocket, dataSocket, clientSocket;
+  int controlSocket, dataSocket, clientSocket, workerID[NTHREADS];
   struct sockaddr_in server, clients;
-  pthread_t worker[100], client[100];
+  pthread_t worker_thread[NTHREADS];
 
-  pthread_mutex_init(&lock);  //dont forget error handling!
+  pthread_mutex_init(&lock, NULL);  //dont forget error handling!
 
   //worker thread pools
   for (int i = 0; i < NTHREADS; i++)
   {
     workerID[i] = i;
-    pthread_create(&worker[i], NULL, worker, workerID[i]);
+    pthread_create(&worker_thread[i], NULL, worker, workerID[i]);
   }
 
   //create socket
@@ -193,10 +207,15 @@ int main(int argc, char** argv) {
   int c = sizeof(struct sockaddr_in);
 
   //accept any incoming connection
-  while (clientSocket = accept(dataSocket, &client, &c))
+  while (clientSocket = accept(dataSocket, &clients, &c))
   {
     printf("Connection accepted.");
     //wake up thread, then join
+    pthread_mutex_lock(&lock);              //check error!
+    pthread_cond_broadcast(&newClient);
+    pthread_mutex_unlock(&lock);
+
+    pthread_join(worker_thread[i], NULL);   //check error!
   }
 
   return 0;
