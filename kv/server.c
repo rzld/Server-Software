@@ -24,6 +24,7 @@ pthread_cond_t newClient;
 bool checkClient;
 int workerBusy, clientWaiting, nConnections;
 bool workerTaken[NTHREADS];
+int run;
 
 /* A worker thread. You should write the code of this function. */
 void* worker(void* p) {
@@ -46,6 +47,7 @@ void* worker(void* p) {
   }
 
   workerTaken[socket_] = true;
+  printf("Worker %d executing task.\n", socket_);
 
   //welcome message
   message = "Welcome to the KV store.\n";
@@ -73,7 +75,7 @@ void* worker(void* p) {
   }
   else if (inputSize == -1)
   {
-    perror("Failed.\n");
+    printf("Failed.\n");
   }
 
   //parse the buffer
@@ -140,13 +142,13 @@ int main(int argc, char** argv) {
         printf("Usage: %s data-port control-port\n", argv[0]);
         exit(1);
 	} else {
-        cport = atoi(argv[2]);
-        dport = atoi(argv[1]);
+        cport = atoi(argv[1]);
+        dport = atoi(argv[2]);
 	}
 
   // start writing
   int controlSocket, dataSocket, clientSocket, workerID[NTHREADS];
-  struct sockaddr_in server, clients;
+  struct sockaddr_in controls, clients;
   pthread_t worker_thread[NTHREADS];
 
   pthread_mutex_init(&lock, NULL);  //dont forget error handling!
@@ -174,23 +176,21 @@ int main(int argc, char** argv) {
   printf("Sockets created.\n");
 
   //sockaddr_in structure
-  socklen_t len = sizeof(server);
-  memset(&server, 0, len);
-  server.sin_family = AF_INET;
-  server.sin_addr.s_addr = htonl(INADDR_ANY);
-  server.sin_port = htons(dport);
+  socklen_t len = sizeof(controls);
+  memset(&controls, 0, len);
+  controls.sin_family = AF_INET;
+  controls.sin_addr.s_addr = htonl(INADDR_ANY);
+  controls.sin_port = htons(cport);
 
-  /*
   socklen_t len2 = sizeof(clients);
   memset(&clients, 0, len2);
   clients.sin_family = AF_INET;
   clients.sin_addr.sts_addr = htonl(INADDR_ANY);
   clients.sin_port = htons(dport);
-  */
 
-  //bind
-  int errBindC = bind(controlSocket, &server, len);
-  int errBindD = bind(dataSocket, &server, len);
+  //bind to two sockets
+  int errBindC = bind(controlSocket, &controls, len); //control socket
+  int errBindD = bind(dataSocket, &clients, len);     //data socket
   if (errBindC < 0 || errBindD < 0)
   {
     printf("Bind error.\n");
@@ -207,15 +207,48 @@ int main(int argc, char** argv) {
   int c = sizeof(struct sockaddr_in);
 
   //accept any incoming connection
-  while (clientSocket = accept(dataSocket, &clients, &c))
+  run = 1;
+  while (run)
   {
-    printf("Connection accepted.");
-    //wake up thread, then join
-    pthread_mutex_lock(&lock);              //check error!
-    pthread_cond_broadcast(&newClient);
-    pthread_mutex_unlock(&lock);
+    if (workerBusy < NTHREADS)
+    {
+      int conn = accept(dataSocket, &clients, &c);
+      
+      if (conn == -1)
+      {
+        //error
+      }
+      else
+      {
+        printf("Got a connection.");
 
-    pthread_join(worker_thread[i], NULL);   //check error!
+        for (int i=0; i<NTHREADS; i++)
+        {
+          if (!workerTaken[i])
+          {
+            printf("Delegating to worker %d.\n", i);
+            workerBusy++;
+
+            //wake up thread, then join
+            pthread_mutex_lock(&lock);              //check error!
+            //broadcast or semaphore?
+            pthread_cond_signal(&newClient);
+            pthread_mutex_unlock(&lock);
+
+            workerBusy--;
+          }
+        }
+      }
+    }
+    else
+    {
+      clientWaiting++;
+    }
+  }
+
+  for (int i=0; i<NTHREADS; i++)
+  {
+      pthread_join(worker_thread[i], NULL);   //check error!
   }
 
   return 0;
