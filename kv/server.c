@@ -2,6 +2,7 @@
 
 //References:
 // https://gist.github.com/batuhangoksu/2b3afe5970b262d54626
+// http://stackoverflow.com/questions/9488185/waking-up-individual-threads-instead-of-busy-wait-in-pthreads
 
 #include "kv.h"
 #include "parser.h"
@@ -19,12 +20,13 @@
 #define BACKLOG 10
 
 /* Add anything you want here. */
-pthread_mutex_t lock;
-pthread_cond_t newClient;
-bool checkClient;
+pthread_mutex_t main_lock, thr_lock;
+pthread_cond_t main_cond, thr_cond;
+bool checkClient, workerAvailable;
 int workerBusy, clientWaiting, nConnections;
 bool workerTaken[NTHREADS];
 int run;
+int totalWorker = NTHREADS;
 
 /* A worker thread. You should write the code of this function. */
 void* worker(void* p) {
@@ -36,17 +38,23 @@ void* worker(void* p) {
   printf("Worker %d is waiting for connection.\n", socket_);
 
   //lock thread
-  pthread_mutex_lock(&lock); //Check error!!!
+  pthread_mutex_lock(&thr_lock); //Check error!!!
 
-  workerTaken[socket_] = false;
+  // workerTaken[socket_] = false;
+  //pthread_mutex_lock(&main_lock);
+  workerAvailable = true;
+  pthread_cond_signal(&main_cond);
+  //pthread_mutex_unlock(&main_lock);
 
   //wait for connection
   while(!checkClient)
   {
-    pthread_cond_wait(&newClient, &lock);
+    pthread_cond_wait(&thr_cond, &thr_lock);
   }
 
-  workerTaken[socket_] = true;
+  //workerTaken[socket_] = true;
+
+  totalWorker--;
   printf("Worker %d executing task.\n", socket_);
 
   //welcome message
@@ -131,7 +139,8 @@ void* worker(void* p) {
     //error: too many parameters
   }
 
-  pthread_mutex_unlock(&lock);
+  pthread_mutex_unlock(&thr_lock);
+  totalWorker++;
 }
 
 /* You may add code to the main() function. */
@@ -139,7 +148,7 @@ int main(int argc, char** argv) {
     int cport, dport; /* control and data ports. */
 
 	if (argc < 3) {
-        printf("Usage: %s data-port control-port\n", argv[0]);
+        printf("Usage: %s control-port data-port\n", argv[0]);
         exit(1);
 	} else {
         cport = atoi(argv[1]);
@@ -151,29 +160,36 @@ int main(int argc, char** argv) {
   struct sockaddr_in controls, clients;
   pthread_t worker_thread[NTHREADS];
 
-  pthread_mutex_init(&lock, NULL);  //dont forget error handling!
-
-  //worker thread pools
-  for (int i = 0; i < NTHREADS; i++)
-  {
-    workerID[i] = i;
-    pthread_create(&worker_thread[i], NULL, worker, workerID[i]);
-  }
+  pthread_mutex_init(&main_lock, NULL);  //dont forget error handling!
+  pthread_mutex_init(&thr_lock, NULL);
+  pthread_cond_init(&main_cond, NULL);
+  pthread_cond_init(&thr_cond, NULL);
 
   //create socket
   controlSocket = socket(AF_INET, SOCK_STREAM, 0);
   if (controlSocket == -1)
   {
     printf("Control socket creation failed.\n");
+    return 1;
   }
 
   dataSocket = socket(AF_INET, SOCK_STREAM, 0);
   if (dataSocket == -1)
   {
     printf("Data socket creation failed.\n");
+    return 1;
   }
 
   printf("Sockets created.\n");
+
+  //worker thread pools
+  for (int i = 0; i < NTHREADS; i++)
+  {
+    workerID[i] = i;
+    pthread_create(&worker_thread[i], NULL, worker, (void*)&workerID[i]);
+  }
+
+  sleep(1);
 
   //sockaddr_in structure
   socklen_t len = sizeof(controls);
@@ -185,12 +201,12 @@ int main(int argc, char** argv) {
   socklen_t len2 = sizeof(clients);
   memset(&clients, 0, len2);
   clients.sin_family = AF_INET;
-  clients.sin_addr.sts_addr = htonl(INADDR_ANY);
+  clients.sin_addr.s_addr = htonl(INADDR_ANY);
   clients.sin_port = htons(dport);
 
   //bind to two sockets
-  int errBindC = bind(controlSocket, &controls, len); //control socket
-  int errBindD = bind(dataSocket, &clients, len);     //data socket
+  int errBindC = bind(controlSocket, (struct sockaddr *)&controls, len); //control socket
+  int errBindD = bind(dataSocket, (struct sockaddr *)&clients, len2);     //data socket
   if (errBindC < 0 || errBindD < 0)
   {
     printf("Bind error.\n");
@@ -199,29 +215,46 @@ int main(int argc, char** argv) {
   printf("Bind success.\n");
 
   //listen
-  listen(controlSocket, BACKLOG);
+  //listen(controlSocket, BACKLOG);
   listen(dataSocket, BACKLOG);
 
   //waiting for incoming connection
-  printf("Waiting for clients...");
+  printf("Waiting for clients...\n");
+  //workerAvailable = false;
+  if (totalWorker == 0)
+  {
+    workerAvailable = false;
+  }
+
+  pthread_mutex_lock(&main_lock);
+  while (!workerAvailable)
+  {
+    pthread_cond_wait(&main_cond, &main_lock);
+  }
+  pthread_mutex_unlock(&main_lock);
+
   int c = sizeof(struct sockaddr_in);
 
   //accept any incoming connection
   run = 1;
   while (run)
   {
-    if (workerBusy < NTHREADS)
-    {
-      int conn = accept(dataSocket, &clients, &c);
-      
+    //if (workerBusy < NTHREADS)
+    //{
+      int conn = accept(dataSocket, (struct sockaddr *)&clients, (socklen_t*)&c);
+
       if (conn == -1)
       {
         //error
       }
       else
       {
-        printf("Got a connection.");
-
+        printf("Got a connection.\n");
+        pthread_mutex_lock(&thr_lock);
+        checkClient = true;
+        pthread_cond_broadcast(&thr_cond);
+        pthread_mutex_unlock(&thr_lock);
+        /*
         for (int i=0; i<NTHREADS; i++)
         {
           if (!workerTaken[i])
@@ -237,13 +270,14 @@ int main(int argc, char** argv) {
 
             workerBusy--;
           }
+          */
         }
-      }
-    }
-    else
-    {
-      clientWaiting++;
-    }
+      //}
+    //}
+    //else
+    //{
+    //  clientWaiting++;
+    //}
   }
 
   for (int i=0; i<NTHREADS; i++)
