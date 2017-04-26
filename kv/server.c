@@ -8,6 +8,7 @@
 #include "parser.h"
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <sys/poll.h>
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <pthread.h>
@@ -35,7 +36,8 @@ void* worker(void* p) {
   int socket_;
   int inputSize;
   char *message,
-       buffer[255];
+       buffer[255],
+       msgClient[255];
 
   while(run)
   {
@@ -65,7 +67,7 @@ void* worker(void* p) {
 
     totalWorker--;
     printf("Worker %d executing task.\n", workerID_);
-    printf(">> Current available worker: %d\n\n", totalWorker);
+    //printf(">> Current available worker: %d\n\n", totalWorker);
 
     //welcome message
     message = "Welcome to the KV store.\n";
@@ -77,14 +79,116 @@ void* worker(void* p) {
     enum DATA_CMD cmd;    //data
     char* key;
     char* text;
-    while ((inputSize = recv(socket_, buffer, 255, 0)))
+
+    while (inputSize = read(socket_, buffer, sizeof(buffer)-1))
     {
       // end of string marker
       buffer[inputSize] = '\0';
+
+      //parse the buffer
+      int msg = parse_d(buffer, &cmd, &key, &text);
+
       // clear message buffer
       memset(buffer, 0, 255);
-    }
 
+      //write response line
+      if (cmd == D_PUT)
+      {
+        //the line contains "put key value" command
+        // the pointers key and text point to 0-terminated strings
+        // containing the key and value
+        int put_ = createItem(key, text);
+        if (put_ < 0)
+        {
+          message = "Failed.\n";
+          write(socket_, message, strlen(message));
+        }
+        else
+        {
+          message = "Success.\n";
+          write(socket_, message, strlen(message));
+        }
+      }
+      else if (cmd == D_GET) //BELUM!
+      {
+        // BELUM
+        //contains a "get key" command
+        // pointer key points to the key and text is null
+        strcpy(buffer, findValue(key));
+        write(socket_, buffer, strlen(buffer));
+      }
+      else if (cmd == D_COUNT)
+      {
+        //contains "count" command. key and value null
+        //message = "count\n";
+        int itemsCount = countItems();
+        sprintf(buffer, "%d\n", itemsCount);
+        write(socket_, buffer, strlen(buffer));
+        //sprintf(message, "%d", itemsCount);
+        //write(socket_, message, strlen(message));
+      }
+      else if (cmd == D_DELETE)
+      {
+        //contains "delete" key. pointer key points to the key and text is null
+        int del_ = deleteItem(key, 0);
+        if (del_ < 0)
+        {
+          message = "Failed.\n";
+          write(socket_, message, strlen(message));
+        }
+        else
+        {
+          message = "Success.\n";
+          write(socket_, message, strlen(message));
+        }
+      }
+      else if (cmd == D_EXISTS)
+      {
+        //contains "exists" key command. pointer key points to the key and text is null
+        int exists_ = itemExists(key);
+        sprintf(buffer, "%d\n", exists_);
+        write(socket_, buffer, strlen(buffer));
+      }
+      else if (cmd == D_END)
+      {
+        printf("Disconnected.\n");
+        //line empty, close connection
+        totalWorker++;
+        fflush(stdout);
+        close(socket_);
+        break;
+      }
+      else if (cmd == D_ERR_OL)
+      {
+        //error: line too long
+        message = "Error: command line too long.\n";
+        write(socket_, message, strlen(message));
+      }
+      else if (cmd == D_ERR_INVALID)
+      {
+        //error: invalid command
+        message = "Error: invalid command.\n";
+        write(socket_, message, strlen(message));
+      }
+      else if (msg == D_ERR_SHORT)
+      {
+        //error: too few parameters
+        //still not working
+        message = "Too few parameters.\n";
+        write(socket_, message, strlen(message));
+      }
+      else if (msg == D_ERR_LONG)
+      {
+        //error: too many parameters
+        //still not working
+        message = "Too many parameters.\n";
+        write(socket_, message, strlen(message));
+      }
+
+      // clear message buffer
+      memset(buffer, 0, 255);
+
+    }
     if (inputSize == 0)
     {
       printf("Disconnected.\n");
@@ -96,60 +200,6 @@ void* worker(void* p) {
     {
       printf("Failed.\n");
     }
-
-    //parse the buffer
-    int msg = parse_d(buffer, &cmd, &key, &text);
-
-    //write response line
-    if (cmd == D_PUT)
-    {
-      //the line contains "put key value" command
-      // the pointers key and text point to 0-terminated strings
-      // containing the key and value
-      int put_ = createItem(key, text);
-    }
-    else if (cmd == D_GET)
-    {
-      //contains a "get key" command
-      // pointer key points to the key and text is null
-      int get_ = findValue(key);
-    }
-    else if (cmd == D_COUNT)
-    {
-      //contains "count" command. key and value null
-      int itemsCount = countItems();
-    }
-    else if (cmd == D_DELETE)
-    {
-      //contains "delete" key. pointer key points to the key and text is null
-      int del_ = deleteItem(key, 1);
-    }
-    else if (cmd == D_EXISTS)
-    {
-      //contains "exists" key command. pointer key points to the key and text is nully
-      int exists_ = itemExists(key);
-    }
-    else if (cmd == D_END)
-    {
-      //line empty, close connection
-    }
-    else if (cmd == D_ERR_OL)
-    {
-      //error: line too long
-    }
-    else if (cmd == D_ERR_INVALID)
-    {
-      //error: invalid command
-    }
-    else if (msg == D_ERR_SHORT)
-    {
-      //error: too few parameters
-    }
-    else if (msg == D_ERR_LONG)
-    {
-      //error: too many parameters
-    }
-
   }
 }
 
@@ -250,7 +300,7 @@ int main(int argc, char** argv) {
       }
       else
       {
-        printf("> Available worker: %d.\n", totalWorker);
+        //printf("> Available worker: %d.\n", totalWorker);
 
         if (totalWorker == 0)
         {
@@ -286,31 +336,7 @@ int main(int argc, char** argv) {
         //pass conn variable to thread
 
         pthread_mutex_unlock(&thr_lock);
-        //checkClient = false;
-        /*
-        for (int i=0; i<NTHREADS; i++)
-        {
-          if (!workerTaken[i])
-          {
-            printf("Delegating to worker %d.\n", i);
-            workerBusy++;
-
-            //wake up thread, then join
-            pthread_mutex_lock(&lock);              //check error!
-            //broadcast or semaphore?
-            pthread_cond_signal(&newClient);
-            pthread_mutex_unlock(&lock);
-
-            workerBusy--;
-          }
-          */
-        }
-      //}
-    //}
-    //else
-    //{
-    //  clientWaiting++;
-    //}
+      }
   }
 
   for (int i=0; i<NTHREADS; i++)
