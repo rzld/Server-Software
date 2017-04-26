@@ -25,122 +25,132 @@ pthread_cond_t main_cond, thr_cond;
 bool checkClient, workerAvailable;
 int workerBusy, clientWaiting, nConnections;
 bool workerTaken[NTHREADS];
-int run;
+int run, connectionID[100];
 int totalWorker = NTHREADS;
+int clientNumber, clientsWaiting;
 
 /* A worker thread. You should write the code of this function. */
 void* worker(void* p) {
-  int socket_ = *(int*) p;
+  int workerID_ = *(int*) p;
+  int socket_;
   int inputSize;
   char *message,
        buffer[255];
 
-  printf("Worker %d is waiting for connection.\n", socket_);
+  while(run)
+  {
+    printf("Worker %d is waiting for connection.\n", workerID_);
+    checkClient = false;
+    //lock thread
+    // workerTaken[socket_] = false;
+    pthread_mutex_lock(&main_lock);
+    if (clientsWaiting > 0)
+    {
+      pthread_cond_signal(&main_cond);
+      workerAvailable = true;
+    }
+    pthread_mutex_unlock(&main_lock);
 
-  //lock thread
-  pthread_mutex_lock(&thr_lock); //Check error!!!
+    pthread_mutex_lock(&thr_lock); //Check error!!!
+    //wait for connection
+    while(!checkClient)
+    {
+      pthread_cond_wait(&thr_cond, &thr_lock);
+    }
 
-  // workerTaken[socket_] = false;
-  //pthread_mutex_lock(&main_lock);
-  workerAvailable = true;
-  pthread_cond_signal(&main_cond);
-  //pthread_mutex_unlock(&main_lock);
+    socket_ = connectionID[clientNumber];
 
-  //wait for connection
-  while(!checkClient)
-  {
-    pthread_cond_wait(&thr_cond, &thr_lock);
-  }
+    pthread_mutex_unlock(&thr_lock);
+    //workerTaken[socket_] = true;
 
-  //workerTaken[socket_] = true;
+    totalWorker--;
+    printf("Worker %d executing task.\n", workerID_);
+    printf(">> Current available worker: %d\n\n", totalWorker);
 
-  totalWorker--;
-  printf("Worker %d executing task.\n", socket_);
+    //welcome message
+    message = "Welcome to the KV store.\n";
+    write(socket_, message, strlen(message));
+    message = "What do you want to do?\n";
+    write(socket_, message, strlen(message));
 
-  //welcome message
-  message = "Welcome to the KV store.\n";
-  write(socket_, message, strlen(message));
-  message = "What do you want to do?\n";
-  write(socket_, message, strlen(message));
+    //read from client
+    enum DATA_CMD cmd;    //data
+    char* key;
+    char* text;
+    while ((inputSize = recv(socket_, buffer, 255, 0)))
+    {
+      // end of string marker
+      buffer[inputSize] = '\0';
+      // clear message buffer
+      memset(buffer, 0, 255);
+    }
 
-  //read from client
-  enum DATA_CMD cmd;    //data
-  char* key;
-  char* text;
-  while ((inputSize = recv(socket_, buffer, 255, 0)))
-  {
-    // end of string marker
-    buffer[inputSize] = '\0';
-    // clear message buffer
-    memset(buffer, 0, 255);
-  }
+    if (inputSize == 0)
+    {
+      printf("Disconnected.\n");
+      totalWorker++;
+      fflush(stdout);
+      close(socket_);
+    }
+    else if (inputSize == -1)
+    {
+      printf("Failed.\n");
+    }
 
-  if (inputSize == 0)
-  {
-    printf("Disconnected.\n");
-    fflush(stdout);
-    close(socket_);
-  }
-  else if (inputSize == -1)
-  {
-    printf("Failed.\n");
-  }
+    //parse the buffer
+    int msg = parse_d(buffer, &cmd, &key, &text);
 
-  //parse the buffer
-  int msg = parse_d(buffer, &cmd, &key, &text);
+    //write response line
+    if (cmd == D_PUT)
+    {
+      //the line contains "put key value" command
+      // the pointers key and text point to 0-terminated strings
+      // containing the key and value
+      int put_ = createItem(key, text);
+    }
+    else if (cmd == D_GET)
+    {
+      //contains a "get key" command
+      // pointer key points to the key and text is null
+      int get_ = findValue(key);
+    }
+    else if (cmd == D_COUNT)
+    {
+      //contains "count" command. key and value null
+      int itemsCount = countItems();
+    }
+    else if (cmd == D_DELETE)
+    {
+      //contains "delete" key. pointer key points to the key and text is null
+      int del_ = deleteItem(key, 1);
+    }
+    else if (cmd == D_EXISTS)
+    {
+      //contains "exists" key command. pointer key points to the key and text is nully
+      int exists_ = itemExists(key);
+    }
+    else if (cmd == D_END)
+    {
+      //line empty, close connection
+    }
+    else if (cmd == D_ERR_OL)
+    {
+      //error: line too long
+    }
+    else if (cmd == D_ERR_INVALID)
+    {
+      //error: invalid command
+    }
+    else if (msg == D_ERR_SHORT)
+    {
+      //error: too few parameters
+    }
+    else if (msg == D_ERR_LONG)
+    {
+      //error: too many parameters
+    }
 
-  //write response line
-  if (cmd == D_PUT)
-  {
-    //the line contains "put key value" command
-    // the pointers key and text point to 0-terminated strings
-    // containing the key and value
-    int put_ = createItem(key, text);
   }
-  else if (cmd == D_GET)
-  {
-    //contains a "get key" command
-    // pointer key points to the key and text is null
-    int get_ = findValue(key);
-  }
-  else if (cmd == D_COUNT)
-  {
-    //contains "count" command. key and value null
-    int itemsCount = countItems();
-  }
-  else if (cmd == D_DELETE)
-  {
-    //contains "delete" key. pointer key points to the key and text is null
-    int del_ = deleteItem(key, 1);
-  }
-  else if (cmd == D_EXISTS)
-  {
-    //contains "exists" key command. pointer key points to the key and text is nully
-    int exists_ = itemExists(key);
-  }
-  else if (cmd == D_END)
-  {
-    //line empty, close connection
-  }
-  else if (cmd == D_ERR_OL)
-  {
-    //error: line too long
-  }
-  else if (cmd == D_ERR_INVALID)
-  {
-    //error: invalid command
-  }
-  else if (msg == D_ERR_SHORT)
-  {
-    //error: too few parameters
-  }
-  else if (msg == D_ERR_LONG)
-  {
-    //error: too many parameters
-  }
-
-  pthread_mutex_unlock(&thr_lock);
-  totalWorker++;
 }
 
 /* You may add code to the main() function. */
@@ -182,6 +192,9 @@ int main(int argc, char** argv) {
 
   printf("Sockets created.\n");
 
+  checkClient = false;
+  run = 1;
+
   //worker thread pools
   for (int i = 0; i < NTHREADS; i++)
   {
@@ -220,23 +233,11 @@ int main(int argc, char** argv) {
 
   //waiting for incoming connection
   printf("Waiting for clients...\n");
-  //workerAvailable = false;
-  if (totalWorker == 0)
-  {
-    workerAvailable = false;
-  }
-
-  pthread_mutex_lock(&main_lock);
-  while (!workerAvailable)
-  {
-    pthread_cond_wait(&main_cond, &main_lock);
-  }
-  pthread_mutex_unlock(&main_lock);
+  workerAvailable = true;
 
   int c = sizeof(struct sockaddr_in);
 
   //accept any incoming connection
-  run = 1;
   while (run)
   {
     //if (workerBusy < NTHREADS)
@@ -249,11 +250,43 @@ int main(int argc, char** argv) {
       }
       else
       {
+        printf("> Available worker: %d.\n", totalWorker);
+
+        if (totalWorker == 0)
+        {
+          workerAvailable = false;
+          clientsWaiting++;
+        }
+
+        pthread_mutex_lock(&main_lock);
+        while (!workerAvailable)
+        {
+          printf("All workers are busy, please wait.\n");
+          pthread_cond_wait(&main_cond, &main_lock);
+        }
+        pthread_mutex_unlock(&main_lock);
+
+        if (clientsWaiting > 0)
+        {
+          clientsWaiting--;
+        }
+
+        //printf("Client number %d\n", clientNumber);
+        //printf("Connection ID %d %d\n", conn, connectionID[clientNumber]);
+
         printf("Got a connection.\n");
+
         pthread_mutex_lock(&thr_lock);
+
+        clientNumber++;
+        connectionID[clientNumber] = conn;
+
+        pthread_cond_signal(&thr_cond);
         checkClient = true;
-        pthread_cond_broadcast(&thr_cond);
+        //pass conn variable to thread
+
         pthread_mutex_unlock(&thr_lock);
+        //checkClient = false;
         /*
         for (int i=0; i<NTHREADS; i++)
         {
