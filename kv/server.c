@@ -23,9 +23,9 @@
 /* Add anything you want here. */
 pthread_mutex_t main_lock, thr_lock;
 pthread_cond_t main_cond, thr_cond;
-bool checkClient, workerAvailable;
+bool checkClient, workerAvailable, work, ctrlPort;
 int workerBusy, clientWaiting, nConnections;
-bool workerTaken[NTHREADS];
+//bool workerTaken[NTHREADS];
 int run, connectionID[100];
 int totalWorker = NTHREADS;
 int clientNumber, clientsWaiting;
@@ -39,7 +39,9 @@ void* worker(void* p) {
        buffer[255],
        msgClient[255];
 
-  while(run)
+  work = true;
+
+  while(work)
   {
     printf("Worker %d is waiting for connection.\n", workerID_);
     checkClient = false;
@@ -100,12 +102,12 @@ void* worker(void* p) {
         int put_ = createItem(key, text);
         if (put_ < 0)
         {
-          message = "Failed.\n";
+          message = "Create item Failed.\n";
           write(socket_, message, strlen(message));
         }
         else
         {
-          message = "Success.\n";
+          message = "Create item Success.\n";
           write(socket_, message, strlen(message));
         }
       }
@@ -133,12 +135,12 @@ void* worker(void* p) {
         int del_ = deleteItem(key, 0);
         if (del_ < 0)
         {
-          message = "Failed.\n";
+          message = "Delete item Failed.\n";
           write(socket_, message, strlen(message));
         }
         else
         {
-          message = "Success.\n";
+          message = "Delete item Success.\n";
           write(socket_, message, strlen(message));
         }
       }
@@ -189,7 +191,7 @@ void* worker(void* p) {
       memset(buffer, 0, 255);
 
     }
-    if (inputSize == 0)
+    /*if (inputSize == 0)
     {
       printf("Disconnected.\n");
       totalWorker++;
@@ -199,7 +201,7 @@ void* worker(void* p) {
     else if (inputSize == -1)
     {
       printf("Failed.\n");
-    }
+    }*/
   }
 }
 
@@ -216,9 +218,10 @@ int main(int argc, char** argv) {
 	}
 
   // start writing
-  int controlSocket, dataSocket, clientSocket, workerID[NTHREADS];
+  int controlSocket, dataSocket, workerID[NTHREADS];
   struct sockaddr_in controls, clients;
   pthread_t worker_thread[NTHREADS];
+  struct pollfd ufds[2];
 
   pthread_mutex_init(&main_lock, NULL);  //dont forget error handling!
   pthread_mutex_init(&thr_lock, NULL);
@@ -278,7 +281,7 @@ int main(int argc, char** argv) {
   printf("Bind success.\n");
 
   //listen
-  //listen(controlSocket, BACKLOG);
+  listen(controlSocket, BACKLOG);
   listen(dataSocket, BACKLOG);
 
   //waiting for incoming connection
@@ -292,51 +295,148 @@ int main(int argc, char** argv) {
   {
     //if (workerBusy < NTHREADS)
     //{
-      int conn = accept(dataSocket, (struct sockaddr *)&clients, (socklen_t*)&c);
+    ufds[0].fd = controlSocket;
+    ufds[0].events = POLLIN;
 
-      if (conn == -1)
+    ufds[1].fd = dataSocket;
+    ufds[1].events = POLLIN;
+
+    int rv = poll(ufds, 2, 5000);
+
+    if (rv == -1)
+    {
+      printf("Error occured in poll.\n");
+    }
+    /*else if (rv == 0)
+    {
+      printf("Timeout!\n");
+    }*/
+    else
+    {
+      if (ufds[1].revents & POLLIN)
       {
-        //error
+        int conn = accept(dataSocket, (struct sockaddr *)&clients, (socklen_t*)&c);
+
+        if (conn == -1)
+        {
+          printf("Connection error!\n");
+        }
+        else
+        {
+          //printf("> Available worker: %d.\n", totalWorker);
+
+          if (totalWorker == 0)
+          {
+            workerAvailable = false;
+            clientsWaiting++;
+          }
+
+          pthread_mutex_lock(&main_lock);
+          while (!workerAvailable)
+          {
+            printf("All workers are busy, please wait.\n");
+            pthread_cond_wait(&main_cond, &main_lock);
+          }
+          pthread_mutex_unlock(&main_lock);
+
+          if (clientsWaiting > 0)
+          {
+            clientsWaiting--;
+          }
+
+          //printf("Client number %d\n", clientNumber);
+          //printf("Connection ID %d %d\n", conn, connectionID[clientNumber]);
+
+          printf("Got a connection.\n");
+
+          pthread_mutex_lock(&thr_lock);
+
+          clientNumber++;
+          connectionID[clientNumber] = conn;
+
+          pthread_cond_signal(&thr_cond);
+          checkClient = true;
+          //pass conn variable to thread
+
+          pthread_mutex_unlock(&thr_lock);
+        }
       }
-      else
+      if (ufds[0].revents & POLLIN)
       {
-        //printf("> Available worker: %d.\n", totalWorker);
+        int conn = accept(controlSocket, (struct sockaddr *)&controls, (socklen_t*)&c);
+        int socket_;
 
-        if (totalWorker == 0)
+        if (conn == -1)
         {
-          workerAvailable = false;
-          clientsWaiting++;
+          printf("Connection error!\n");
         }
-
-        pthread_mutex_lock(&main_lock);
-        while (!workerAvailable)
+        else
         {
-          printf("All workers are busy, please wait.\n");
-          pthread_cond_wait(&main_cond, &main_lock);
+          socket_ = conn;
+          printf("Connected to control port\n");
+          ctrlPort = true;
+
+          char* message, buffer[255];
+          enum DATA_CMD cmd;    //data
+          char* key;
+          char* text;
+          int inputSize;
+
+          message = "> You are connected to the control port\n";
+          write(socket_, message, strlen(message));
+          message = "> What do you want to do?\n";
+          write(socket_, message, strlen(message));
+
+          while (inputSize = read(socket_, buffer, sizeof(buffer)-1))
+          {
+            // end of string marker
+            buffer[inputSize] = '\0';
+
+            //parse the buffer
+            cmd = parse_c(buffer);
+
+            // clear message buffer
+            memset(buffer, 0, 255);
+
+            if (cmd == C_SHUTDOWN)
+            {
+              
+            }
+            else if (cmd == C_COUNT)
+            {
+              int itemsCount = countItems();
+              sprintf(buffer, "%d\n", itemsCount);
+              write(socket_, buffer, strlen(buffer));
+            }
+            else if (cmd == C_ERROR)
+            {
+
+            }
+          }
+
         }
-        pthread_mutex_unlock(&main_lock);
-
-        if (clientsWaiting > 0)
-        {
-          clientsWaiting--;
-        }
-
-        //printf("Client number %d\n", clientNumber);
-        //printf("Connection ID %d %d\n", conn, connectionID[clientNumber]);
-
-        printf("Got a connection.\n");
-
-        pthread_mutex_lock(&thr_lock);
-
-        clientNumber++;
-        connectionID[clientNumber] = conn;
-
-        pthread_cond_signal(&thr_cond);
-        checkClient = true;
-        //pass conn variable to thread
-
-        pthread_mutex_unlock(&thr_lock);
       }
+      /*if (ufds[0].revents & POLLPRI)
+      {
+        int conn = accept(controlSocket, (struct sockaddr *)&controls, (socklen_t*)&c);
+        int socket_;
+
+        if (conn == -1)
+        {
+          printf("Connection error!\n");
+        }
+        else
+        {
+          socket_ = conn;
+          printf("Connected to control port *\n");
+
+          char* message, buffer[255];
+
+          message = "You are connected to the control port\n";
+          write(socket_, message, strlen(message));
+        }
+      }*/
+    }
   }
 
   for (int i=0; i<NTHREADS; i++)
