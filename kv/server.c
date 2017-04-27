@@ -35,9 +35,8 @@ void* worker(void* p) {
   int workerID_ = *(int*) p;
   int socket_;
   int inputSize;
-  char *message,
-       buffer[255],
-       msgClient[255];
+  char *message, *message2,
+       buffer[255];
 
   work = true;
 
@@ -47,25 +46,62 @@ void* worker(void* p) {
     checkClient = false;
     //lock thread
     // workerTaken[socket_] = false;
-    pthread_mutex_lock(&main_lock);
+    int err16 = pthread_mutex_lock(&main_lock);
+    if (err16)
+    {
+      printf("Error: mutex locking failed!\n");
+      exit(1);
+    }
+
     if (clientsWaiting > 0)
     {
-      pthread_cond_signal(&main_cond);
+      int err17 = pthread_cond_signal(&main_cond);
+      if (err17)
+      {
+        printf("Error: condition signal failed!\n");
+        exit(1);
+      }
       workerAvailable = true;
     }
-    pthread_mutex_unlock(&main_lock);
+    int err18 = pthread_mutex_unlock(&main_lock);
+    if (err18)
+    {
+      printf("Error: mutex unlocking failed!\n");
+      exit(1);
+    }
 
-    pthread_mutex_lock(&thr_lock); //Check error!!!
+    int err19 = pthread_mutex_lock(&thr_lock);
+    if (err19)
+    {
+      printf("Error: mutex locking failed!\n");
+      exit(1);
+    }
     //wait for connection
     while(!checkClient)
     {
-      pthread_cond_wait(&thr_cond, &thr_lock);
+      int err20 = pthread_cond_wait(&thr_cond, &thr_lock);
+      if (err20)
+      {
+        printf("Error: condition waiting failed!\n");
+        exit(1);
+      }
     }
 
     socket_ = connectionID[clientNumber];
 
-    pthread_mutex_unlock(&thr_lock);
+    int err21 = pthread_mutex_unlock(&thr_lock);
+    if (err21)
+    {
+      printf("Error: mutex unlocking failed!\n");
+      exit(1);
+    }
     //workerTaken[socket_] = true;
+
+    if (ctrlPort)
+    {
+      close(socket_);
+      break;
+    }
 
     totalWorker--;
     printf("Worker %d executing task.\n", workerID_);
@@ -82,13 +118,14 @@ void* worker(void* p) {
     char* key;
     char* text;
 
-    while (inputSize = read(socket_, buffer, sizeof(buffer)-1))
+    while (inputSize = read(socket_, buffer, sizeof(buffer)))
     {
       // end of string marker
       buffer[inputSize] = '\0';
+      printf("%s\n", buffer);
 
       //parse the buffer
-      int msg = parse_d(buffer, &cmd, &key, &text);
+      parse_d(buffer, &cmd, &key, &text);
 
       // clear message buffer
       memset(buffer, 0, 255);
@@ -99,24 +136,48 @@ void* worker(void* p) {
         //the line contains "put key value" command
         // the pointers key and text point to 0-terminated strings
         // containing the key and value
-        int put_ = createItem(key, text);
+        char* copy = malloc(strlen(text) + 1);
+        strncpy(copy, text, strlen(text) + 1);
+        int put_ = createItem(key, copy);
+
         if (put_ < 0)
         {
-          message = "Create item Failed.\n";
-          write(socket_, message, strlen(message));
+          if (itemExists(key) != 0)
+          {
+            int update_ = updateItem(key, copy);
+            message = "Updated.\n";
+            write(socket_, message, strlen(message));
+          }
+          else
+          {
+            message = "Create item failed.\n";
+            write(socket_, message, strlen(message));
+          }
         }
         else
         {
-          message = "Create item Success.\n";
+          message = "Create item success.\n";
           write(socket_, message, strlen(message));
         }
+
+        free(copy);
       }
-      else if (cmd == D_GET) //BELUM!
+      else if (cmd == D_GET)
       {
-        // BELUM
-        //contains a "get key" command
+        //ntains a "get key" command
         // pointer key points to the key and text is null
-        strcpy(buffer, findValue(key));
+        message2 = findValue(key);
+        if (message2 == NULL)
+        {
+          strcpy(buffer, "Does not exist.\n");
+        }
+        else
+        {
+          snprintf(buffer, strlen(message2), "%s\n", message2);
+         //memset(buffer, '\0', sizeof(buffer));
+          //strcpy(buffer, message);
+          //sprintf(buffer, "%s", message);
+        }
         write(socket_, buffer, strlen(buffer));
       }
       else if (cmd == D_COUNT)
@@ -157,29 +218,34 @@ void* worker(void* p) {
         //line empty, close connection
         totalWorker++;
         fflush(stdout);
-        close(socket_);
+        int errc3 = close(socket_);
+        if (errc3 < 0)
+        {
+          printf("Closing failed.\n");
+          return -1;
+        }
         break;
       }
       else if (cmd == D_ERR_OL)
       {
         //error: line too long
-        message = "Error: command line too long.\n";
+        message = "Line too long.\n";
         write(socket_, message, strlen(message));
       }
       else if (cmd == D_ERR_INVALID)
       {
         //error: invalid command
-        message = "Error: invalid command.\n";
+        message = "Invalid command.\n";
         write(socket_, message, strlen(message));
       }
-      else if (msg == D_ERR_SHORT)
+      else if (cmd == D_ERR_SHORT)
       {
         //error: too few parameters
         //still not working
         message = "Too few parameters.\n";
         write(socket_, message, strlen(message));
       }
-      else if (msg == D_ERR_LONG)
+      else if (cmd == D_ERR_LONG)
       {
         //error: too many parameters
         //still not working
@@ -191,18 +257,8 @@ void* worker(void* p) {
       memset(buffer, 0, 255);
 
     }
-    /*if (inputSize == 0)
-    {
-      printf("Disconnected.\n");
-      totalWorker++;
-      fflush(stdout);
-      close(socket_);
-    }
-    else if (inputSize == -1)
-    {
-      printf("Failed.\n");
-    }*/
   }
+  pthread_exit(NULL);
 }
 
 /* You may add code to the main() function. */
@@ -223,10 +279,21 @@ int main(int argc, char** argv) {
   pthread_t worker_thread[NTHREADS];
   struct pollfd ufds[2];
 
-  pthread_mutex_init(&main_lock, NULL);  //dont forget error handling!
-  pthread_mutex_init(&thr_lock, NULL);
-  pthread_cond_init(&main_cond, NULL);
-  pthread_cond_init(&thr_cond, NULL);
+  int err1 = pthread_mutex_init(&main_lock, NULL);  //dont forget error handling!
+  int err2 = pthread_mutex_init(&thr_lock, NULL);
+  int err3 = pthread_cond_init(&main_cond, NULL);
+  int err4 = pthread_cond_init(&thr_cond, NULL);
+
+  if (err1 || err2)
+  {
+    printf("Error: mutex initialization failed!\n");
+    exit(1);
+  }
+  if (err3 || err4)
+  {
+    printf("Error: mutex condition initialization failed!\n");
+    exit(1);
+  }
 
   //create socket
   controlSocket = socket(AF_INET, SOCK_STREAM, 0);
@@ -252,7 +319,12 @@ int main(int argc, char** argv) {
   for (int i = 0; i < NTHREADS; i++)
   {
     workerID[i] = i;
-    pthread_create(&worker_thread[i], NULL, worker, (void*)&workerID[i]);
+    int err5 = pthread_create(&worker_thread[i], NULL, worker, (void*)&workerID[i]);
+    if (err5)
+    {
+      printf("Error: thread creation failed!\n");
+      exit(1);
+    }
   }
 
   sleep(1);
@@ -281,8 +353,13 @@ int main(int argc, char** argv) {
   printf("Bind success.\n");
 
   //listen
-  listen(controlSocket, BACKLOG);
-  listen(dataSocket, BACKLOG);
+  int errL1 = listen(controlSocket, BACKLOG);
+  int errL2 = listen(dataSocket, BACKLOG);
+  if (errL1 < 0 || errL2 < 0)
+  {
+    printf("Listen error.\n");
+    return 1;
+  }
 
   //waiting for incoming connection
   printf("Waiting for clients...\n");
@@ -313,6 +390,7 @@ int main(int argc, char** argv) {
     }*/
     else
     {
+      //data socket
       if (ufds[1].revents & POLLIN)
       {
         int conn = accept(dataSocket, (struct sockaddr *)&clients, (socklen_t*)&c);
@@ -331,13 +409,28 @@ int main(int argc, char** argv) {
             clientsWaiting++;
           }
 
-          pthread_mutex_lock(&main_lock);
+          int err6 = pthread_mutex_lock(&main_lock);
+          if (err6)
+          {
+            printf("Error: mutex lock failed.\n");
+            exit(1);
+          }
           while (!workerAvailable)
           {
             printf("All workers are busy, please wait.\n");
-            pthread_cond_wait(&main_cond, &main_lock);
+            int err7 = pthread_cond_wait(&main_cond, &main_lock);
+            if (err7)
+            {
+              printf("Error: condition waiting failed.\n");
+              exit(1);
+            }
           }
-          pthread_mutex_unlock(&main_lock);
+          int err8 = pthread_mutex_unlock(&main_lock);
+          if (err8)
+          {
+            printf("Error: mutex unlock failed.\n");
+            exit(1);
+          }
 
           if (clientsWaiting > 0)
           {
@@ -349,18 +442,34 @@ int main(int argc, char** argv) {
 
           printf("Got a connection.\n");
 
-          pthread_mutex_lock(&thr_lock);
+          int err9 = pthread_mutex_lock(&thr_lock);
+          if (err9)
+          {
+            printf("Error: mutex lock failed.\n");
+            exit(1);
+          }
 
           clientNumber++;
           connectionID[clientNumber] = conn;
 
-          pthread_cond_signal(&thr_cond);
+          int err10 = pthread_cond_signal(&thr_cond);
+          if (err10)
+          {
+            printf("Error: condition signal failed.\n");
+            exit(1);
+          }
           checkClient = true;
           //pass conn variable to thread
 
-          pthread_mutex_unlock(&thr_lock);
+          int err11 = pthread_mutex_unlock(&thr_lock);
+          if (err11)
+          {
+            printf("Error: mutex unlock failed.\n");
+            exit(1);
+          }
         }
       }
+      //control socket
       if (ufds[0].revents & POLLIN)
       {
         int conn = accept(controlSocket, (struct sockaddr *)&controls, (socklen_t*)&c);
@@ -377,9 +486,7 @@ int main(int argc, char** argv) {
           ctrlPort = true;
 
           char* message, buffer[255];
-          enum DATA_CMD cmd;    //data
-          char* key;
-          char* text;
+          enum CONTROL_CMD cmd;    //data
           int inputSize;
 
           message = "> You are connected to the control port\n";
@@ -387,7 +494,7 @@ int main(int argc, char** argv) {
           message = "> What do you want to do?\n";
           write(socket_, message, strlen(message));
 
-          while (inputSize = read(socket_, buffer, sizeof(buffer)-1))
+          while (inputSize = read(socket_, buffer, sizeof(buffer)))
           {
             // end of string marker
             buffer[inputSize] = '\0';
@@ -400,7 +507,53 @@ int main(int argc, char** argv) {
 
             if (cmd == C_SHUTDOWN)
             {
-              
+              message = "Shutting down.\n";
+              write(socket_, message, strlen(message));
+
+              if (totalWorker > 0)
+              {
+                int err12 = pthread_mutex_lock(&thr_lock);
+                if (err12)
+                {
+                  printf("Error: mutex lock failed.\n");
+                  exit(1);
+                }
+
+                int err13 = pthread_cond_broadcast(&thr_cond);
+                if (err13)
+                {
+                  printf("Error: condition broadcast failed.\n");
+                  exit(1);
+                }
+
+                checkClient = true;
+                work = false;
+
+                int err14 = pthread_mutex_unlock(&thr_lock);
+                if (err14)
+                {
+                  printf("Error: mutex unlock failed.\n");
+                  exit(1);
+                }
+              }
+
+              message = "Waiting for other threads to finish...\n";
+              write(socket_, message, strlen(message));
+
+              //work = false;
+              for (int i=0; i<NTHREADS; i++)
+              {
+                  int err15 = pthread_join(worker_thread[i], NULL);
+                  if (err15)
+                  {
+                    printf("Error: join thread failed.\n");
+                    exit(1);
+                  }
+              }
+
+              close(socket_);
+              run = false;
+              break;
             }
             else if (cmd == C_COUNT)
             {
@@ -410,39 +563,36 @@ int main(int argc, char** argv) {
             }
             else if (cmd == C_ERROR)
             {
-
+              message = "Command error.\n";
+              write(socket_, message, strlen(message));
             }
           }
-
         }
       }
-      /*if (ufds[0].revents & POLLPRI)
-      {
-        int conn = accept(controlSocket, (struct sockaddr *)&controls, (socklen_t*)&c);
-        int socket_;
-
-        if (conn == -1)
-        {
-          printf("Connection error!\n");
-        }
-        else
-        {
-          socket_ = conn;
-          printf("Connected to control port *\n");
-
-          char* message, buffer[255];
-
-          message = "You are connected to the control port\n";
-          write(socket_, message, strlen(message));
-        }
-      }*/
     }
   }
 
-  for (int i=0; i<NTHREADS; i++)
+  int errs1 = shutdown(controlSocket, SHUT_RDWR);
+  int errs2 = shutdown(dataSocket, SHUT_RDWR);
+  int errc1 = close(controlSocket);
+  int errc2 = close(dataSocket);
+
+  if (errs1 < 0 || errs2 < 0)
+  {
+    printf("Shutdown failed.\n");
+    return -1;
+  }
+  if (errc1 < 0 || errc2 < 0)
+  {
+    printf("Closing failed.\n");
+    return -1;
+  }
+  printf("Session disconnected.\n");
+
+  /*for (int i=0; i<NTHREADS; i++)
   {
       pthread_join(worker_thread[i], NULL);   //check error!
-  }
+  }*/
 
   return 0;
 }
