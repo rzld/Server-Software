@@ -122,13 +122,13 @@ void* worker(void* p) {
     {
       // end of string marker
       buffer[inputSize] = '\0';
-      printf("%s\n", buffer);
 
       //parse the buffer
       parse_d(buffer, &cmd, &key, &text);
 
       // clear message buffer
-      memset(buffer, 0, 255);
+      //memset(buffer, 0, 255);
+      //printf("%s %s\n", key, text);
 
       //write response line
       if (cmd == D_PUT)
@@ -139,6 +139,7 @@ void* worker(void* p) {
         char* copy = malloc(strlen(text) + 1);
         strncpy(copy, text, strlen(text) + 1);
         int put_ = createItem(key, copy);
+        //printf("%s %s\n", copy, text);
 
         if (put_ < 0)
         {
@@ -166,19 +167,23 @@ void* worker(void* p) {
       {
         //ntains a "get key" command
         // pointer key points to the key and text is null
-        message2 = findValue(key);
+        message2 = (char*)findValue(key);
+        char buf2[255];
         if (message2 == NULL)
         {
-          strcpy(buffer, "Does not exist.\n");
+          //memset(buf2, '\0', sizeof(buf2));
+          strcpy(buf2, "Does not exist.\n");
         }
         else
         {
-          snprintf(buffer, strlen(message2), "%s\n", message2);
-         //memset(buffer, '\0', sizeof(buffer));
+          //printf("%s\n", message2);
+          //memset(buf2, '\0', sizeof(buf2));
+          //snprintf(buf2, strlen(message2), "%s\n", message2);
           //strcpy(buffer, message);
           //sprintf(buffer, "%s", message);
+          strncpy(buf2, message2, strlen(message2)+1);
         }
-        write(socket_, buffer, strlen(buffer));
+        write(socket_, buf2, strlen(buf2));
       }
       else if (cmd == D_COUNT)
       {
