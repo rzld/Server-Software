@@ -136,16 +136,16 @@ void* worker(void* p) {
         //the line contains "put key value" command
         // the pointers key and text point to 0-terminated strings
         // containing the key and value
-        char* copy = malloc(strlen(text) + 1);
-        strncpy(copy, text, strlen(text) + 1);
-        int put_ = createItem(key, copy);
+        char* copy2 = malloc(strlen(text) + 1);
+        strncpy(copy2, text, strlen(text) + 1);
+        int put_ = createItem(key, copy2);
         //printf("%s %s\n", copy, text);
 
         if (put_ < 0)
         {
           if (itemExists(key) != 0)
           {
-            int update_ = updateItem(key, copy);
+            int update_ = updateItem(key, copy2);
             message = "Updated.\n";
             write(socket_, message, strlen(message));
           }
@@ -161,27 +161,27 @@ void* worker(void* p) {
           write(socket_, message, strlen(message));
         }
 
-        free(copy);
+        //free(copy);
       }
       else if (cmd == D_GET)
       {
         //ntains a "get key" command
         // pointer key points to the key and text is null
-        message2 = (char*)findValue(key);
+        //printf("Check 1\n");
+        char* copy3 = malloc(strlen(key) + 1);
+        strncpy(copy3, key, strlen(key) + 1);
+        message2 = findValue(copy3);
+        //printf("Check 2\n");
+        //printf("%s %s\n", copy3, message2);
+
         char buf2[255];
         if (message2 == NULL)
         {
-          //memset(buf2, '\0', sizeof(buf2));
           strcpy(buf2, "Does not exist.\n");
         }
         else
         {
-          //printf("%s\n", message2);
-          //memset(buf2, '\0', sizeof(buf2));
-          //snprintf(buf2, strlen(message2), "%s\n", message2);
-          //strcpy(buffer, message);
-          //sprintf(buffer, "%s", message);
-          strncpy(buf2, message2, strlen(message2)+1);
+          sprintf(buf2, "%s\n", message2);
         }
         write(socket_, buf2, strlen(buf2));
       }
